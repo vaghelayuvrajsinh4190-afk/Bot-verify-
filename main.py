@@ -33,6 +33,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 VERIFY_HERE_CHANNEL_ID   = 1508730526532501504
 MOD_LOG_CHANNEL_ID       = 1508761687233269861
 SYNDICATE_VERIFY_CHANNEL = 1461666929516347453
+TEAM_NAME_CHANNEL_ID     = 1508730691964244041  # Added Step 4 Channel
 # -------------------
 
 verified_users = set()
@@ -48,6 +49,8 @@ async def on_ready():
         missing.append(f"MOD_LOG_CHANNEL_ID ({MOD_LOG_CHANNEL_ID})")
     if not bot.get_channel(SYNDICATE_VERIFY_CHANNEL):
         missing.append(f"SYNDICATE_VERIFY_CHANNEL ({SYNDICATE_VERIFY_CHANNEL})")
+    if not bot.get_channel(TEAM_NAME_CHANNEL_ID):
+        missing.append(f"TEAM_NAME_CHANNEL_ID ({TEAM_NAME_CHANNEL_ID})")
 
     if missing:
         print(f"⚠️ WARNING - Channels not found: {', '.join(missing)}")
@@ -59,6 +62,9 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
+    # ==========================================
+    # STEP 2: SCREENSHOT VERIFICATION
+    # ==========================================
     if message.channel.id == VERIFY_HERE_CHANNEL_ID:
 
         if len(message.attachments) == 0:
@@ -159,6 +165,46 @@ async def on_message(message):
             color=discord.Color.green()
         )
         await message.channel.send(embed=success_embed, delete_after=30)
+
+    # ==========================================
+    # STEP 4: TEAM NAME VERIFICATION
+    # ==========================================
+    elif message.channel.id == TEAM_NAME_CHANNEL_ID:
+        
+        # Block images in the text-only channel
+        if len(message.attachments) > 0:
+            if not message.author.guild_permissions.administrator:
+                embed = discord.Embed(
+                    title="❌ Text Only",
+                    description=f"{message.author.mention}, please only type your team name and tag here. No images.",
+                    color=discord.Color.red()
+                )
+                await message.channel.send(embed=embed, delete_after=5)
+                await message.delete()
+            return
+
+        team_name_text = message.content
+
+        # Forward the team name to the mod log
+        try:
+            log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID) or await bot.fetch_channel(MOD_LOG_CHANNEL_ID)
+            log_embed = discord.Embed(
+                title="📝 New Team Name Submission",
+                description=f"**Player:** {message.author.mention}\n**Team Info:** {team_name_text}",
+                color=discord.Color.purple()
+            )
+            await log_channel.send(embed=log_embed)
+        except Exception as e:
+            print(f"❌ Cannot access MOD_LOG_CHANNEL: {e}")
+
+        # Send confirmation to the player and delete their message to keep channel clean
+        success_embed = discord.Embed(
+            title="✅ Team Name Registered",
+            description=f"Got it, {message.author.mention}!\nYour team **{team_name_text}** is now pending final mod review.",
+            color=discord.Color.green()
+        )
+        await message.channel.send(embed=success_embed, delete_after=15)
+        await message.delete()
 
     await bot.process_commands(message)
 
