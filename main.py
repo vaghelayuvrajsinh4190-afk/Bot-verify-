@@ -3,7 +3,26 @@ from discord.ext import commands
 import io
 from PIL import Image
 import imagehash
+from threading import Thread
+from flask import Flask
 import os
+
+# --- WEB SERVICE KEEP ALIVE ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Mack Bot is Alive!"
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web_server)
+    t.daemon = True
+    t.start()
+# ------------------------------
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -16,7 +35,6 @@ MOD_LOG_CHANNEL_ID       = 1508761687233269861
 SYNDICATE_VERIFY_CHANNEL = 1461666929516347453
 # -------------------
 
-# Track submissions (resets on bot restart)
 verified_users = set()
 
 @bot.event
@@ -43,7 +61,6 @@ async def on_message(message):
 
     if message.channel.id == VERIFY_HERE_CHANNEL_ID:
 
-        # Block text messages
         if len(message.attachments) == 0:
             if not message.author.guild_permissions.administrator:
                 embed = discord.Embed(
@@ -55,7 +72,6 @@ async def on_message(message):
                 await message.delete()
             return
 
-        # Block wrong count
         if len(message.attachments) != 4:
             embed = discord.Embed(
                 title="⚠️ Incorrect Count",
@@ -66,7 +82,6 @@ async def on_message(message):
             await message.delete()
             return
 
-        # Block duplicate submission
         if message.author.id in verified_users:
             embed = discord.Embed(
                 title="🚫 Already Submitted",
@@ -121,7 +136,6 @@ async def on_message(message):
             await message.delete()
             return
 
-        # Log to mod channel
         try:
             log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID) or await bot.fetch_channel(MOD_LOG_CHANNEL_ID)
         except (discord.NotFound, discord.Forbidden) as e:
@@ -136,13 +150,9 @@ async def on_message(message):
         )
         await log_channel.send(embed=log_embed, files=files_to_send)
 
-        # Mark as submitted
         verified_users.add(message.author.id)
-
-        # Delete original
         await message.delete()
 
-        # Success message
         success_embed = discord.Embed(
             title="✅ Screenshots Accepted",
             description=f"Great job, {message.author.mention}! Under mod review.\n\n**Next Step:** Go to <#{SYNDICATE_VERIFY_CHANNEL}> and click **Verify Your Squad**.",
@@ -152,6 +162,6 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# Render — no Flask needed
+# Web Service — Flask + Bot together
+keep_alive()
 bot.run(os.environ.get('DISCORD_TOKEN'))
-
