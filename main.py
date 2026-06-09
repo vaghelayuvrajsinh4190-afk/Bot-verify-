@@ -207,7 +207,7 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
                 ephemeral=True)
 
         # Race Condition Check
-        if len(role.members) >= max_slots:
+        if len(channel_data.get("teams", [])) >= max_slots:
             return await interaction.response.send_message(
                 embed=make_embed("❌ Registration Full",
                     f"All **{max_slots}** slots are taken!", Theme.ERROR),
@@ -224,11 +224,12 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
             channel_data["teams"] = []
         channel_data["teams"].append({
             "team_name": self.team_name.value,
-            "leader": self.discord_tag.value
+            "leader": self.discord_tag.value,
+            "user_id": interaction.user.id
         })
         save_scrim_config(scrim_config)
 
-        current_slots = len(role.members)
+        current_slots = len(channel_data.get("teams", []))
         setup_msg_id = channel_data.get("setup_message_id")
         if setup_msg_id:
             try:
@@ -278,7 +279,7 @@ class RegisterView(ui.View):
         max_slots = channel_data["max_slots"]
         role = interaction.guild.get_role(role_id)
 
-        if role and len(role.members) >= max_slots:
+        if len(channel_data.get("teams", [])) >= max_slots:
             return await interaction.response.send_message(
                 embed=make_embed("❌ Registration Closed",
                     f"All **{max_slots}** slots are full!", Theme.ERROR),
@@ -883,6 +884,83 @@ async def cmd_close(ctx):
     save_scrim_config(scrim_config)
     await ctx.send(embed=make_embed("🔒 Locked", "Registration is now closed.", Theme.ERROR))
 
+@bot.command(name="wipe")
+@commands.has_permissions(administrator=True)
+async def cmd_wipe(ctx):
+    """Manually wipe the scrim roster for the current channel."""
+    scrim_config = load_scrim_config()
+    channel_data = scrim_config.get(str(ctx.channel.id))
+    
+    if not channel_data:
+        return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
+
+    role = ctx.guild.get_role(channel_data["role_id"])
+    if role:
+        for member in role.members:
+            try:
+                await member.remove_roles(role)
+            except discord.Forbidden:
+                pass
+                
+    channel_data["teams"] = []
+    save_scrim_config(scrim_config)
+    
+    # Update the setup message
+    setup_msg_id = channel_data.get("setup_message_id")
+    if setup_msg_id:
+        try:
+            setup_msg = await ctx.channel.fetch_message(setup_msg_id)
+            updated_embed = create_setup_embed(role.name if role else "Scrim", 0, channel_data["max_slots"])
+            await setup_msg.edit(embed=updated_embed)
+        except discord.NotFound:
+            pass
+
+    await ctx.send(embed=make_embed("🧹 Roster Wiped", "All teams have been cleared and roles removed. The panel is reset to 0.", Theme.SUCCESS))
+
+@bot.command(name="removeslot")
+@commands.has_permissions(administrator=True)
+async def cmd_removeslot(ctx, slot: int):
+    """Manually remove a specific team from a slot (e.g., !removeslot 3)."""
+    scrim_config = load_scrim_config()
+    channel_data = scrim_config.get(str(ctx.channel.id))
+    
+    if not channel_data:
+        return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
+
+    teams = channel_data.get("teams", [])
+    if slot < 1 or slot > len(teams):
+        return await ctx.send(embed=make_embed("❌ Error", f"Invalid slot number. Must be between 1 and {len(teams)}.", Theme.ERROR))
+
+    # Get the team and user ID
+    removed_team = teams.pop(slot - 1)
+    user_id = removed_team.get("user_id")
+
+    # Remove the role if we have the user ID
+    if user_id:
+        role = ctx.guild.get_role(channel_data["role_id"])
+        if role:
+            member = ctx.guild.get_member(user_id)
+            if member:
+                try:
+                    await member.remove_roles(role)
+                except discord.Forbidden:
+                    pass
+
+    save_scrim_config(scrim_config)
+    
+    # Update the panel message
+    setup_msg_id = channel_data.get("setup_message_id")
+    if setup_msg_id:
+        try:
+            setup_msg = await ctx.channel.fetch_message(setup_msg_id)
+            role = ctx.guild.get_role(channel_data["role_id"])
+            updated_embed = create_setup_embed(role.name if role else "Scrim", len(teams), channel_data["max_slots"])
+            await setup_msg.edit(embed=updated_embed)
+        except discord.NotFound:
+            pass
+
+    await ctx.send(embed=make_embed("🗑️ Slot Removed", f"Successfully removed **{removed_team['team_name']}** from Slot {slot}.", Theme.SUCCESS))
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def announce(ctx, role: discord.Role, *, message: str = "Registration is now open! Grab your slots before they fill up."):
@@ -991,7 +1069,9 @@ async def cmd_help(ctx):
             f"> `!scrim_setup @Role <slots>` — Setup scrim registration panel\n"
             f"> `!open` — Manually unlock the registration button\n"
             f"> `!close` — Manually lock the registration button\n"
+            f"> `!removeslot <slot_number>` — Force remove a team from a slot\n"
             f"> `!announce @Role [msg]` — Announce registration is open\n"
+            f"> `!wipe` — Wipe roster and reset panel\n"
         )
 
     embed.description += f"\n{Theme.SEP}"
@@ -1045,17 +1125,30 @@ async def midnight_reset():
     """Reset scrim registration roles at midnight IST."""
     print("🕛 MIDNIGHT RESET: Cleaning up scrim roles...")
     scrim_config = load_scrim_config()
-    scrim_role_ids = set(d["role_id"] for d in scrim_config.values())
 
-    for guild in bot.guilds:
-        for role_id in scrim_role_ids:
-            role = guild.get_role(role_id)
+    for channel_id_str, channel_data in scrim_config.items():
+        channel_data["teams"] = []
+        
+        for guild in bot.guilds:
+            role = guild.get_role(channel_data["role_id"])
             if role:
                 for member in role.members:
                     try:
                         await member.remove_roles(role)
                     except discord.Forbidden:
                         pass
+                
+                # Reset the panel message
+                try:
+                    channel = guild.get_channel(int(channel_id_str))
+                    if channel:
+                        setup_msg = await channel.fetch_message(channel_data["setup_message_id"])
+                        updated_embed = create_setup_embed(role.name, 0, channel_data["max_slots"])
+                        await setup_msg.edit(embed=updated_embed)
+                except Exception:
+                    pass
+                    
+    save_scrim_config(scrim_config)
 
     # Clean up old cooldowns (older than 24h)
     now = datetime.datetime.utcnow()
