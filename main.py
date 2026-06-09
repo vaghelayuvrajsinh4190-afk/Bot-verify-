@@ -857,9 +857,9 @@ async def scrim_setup(ctx, role: discord.Role, slots: int):
     
     await ctx.message.delete()
 
-@bot.command()
+@bot.command(name="open")
 @commands.has_permissions(administrator=True)
-async def open(ctx):
+async def cmd_open(ctx):
     """Manually unlock the registration button."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
@@ -870,9 +870,9 @@ async def open(ctx):
     save_scrim_config(scrim_config)
     await ctx.send(embed=make_embed("🔓 Unlocked", "Registration is now open.", Theme.SUCCESS))
 
-@bot.command()
+@bot.command(name="close")
 @commands.has_permissions(administrator=True)
-async def close(ctx):
+async def cmd_close(ctx):
     """Manually lock the registration button."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
@@ -899,8 +899,8 @@ async def announce(ctx, role: discord.Role, *, message: str = "Registration is n
     
     await ctx.send(content=f"{role.mention}", embed=embed)
 
-@bot.command()
-async def list(ctx):
+@bot.command(name="list")
+async def cmd_list(ctx):
     """Shows the live roster formatted as a clean code block."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
@@ -954,8 +954,8 @@ async def list(ctx):
 #  16. HELP COMMAND (NEW — beautiful embed)
 # ═══════════════════════════════════════════════════════════
 
-@bot.command()
-async def help(ctx):
+@bot.command(name="help")
+async def cmd_help(ctx):
     """Show all available commands."""
     is_admin = ctx.author.guild_permissions.administrator
 
@@ -964,6 +964,7 @@ async def help(ctx):
         f"{Theme.SEP}\n\n"
         f"**👤 Player Commands**\n\n"
         f"> `!status` — Check your verification progress\n"
+        f"> `!list` — View live esports roster for this channel\n"
         f"> `!help` — Show this help menu\n\n"
         f"{Theme.THIN_SEP}\n\n"
         f"**📋 Verification Steps**\n\n"
@@ -985,8 +986,12 @@ async def help(ctx):
             f"> `!stats` — View verification statistics\n"
             f"> `!setrole @Role` — Set the verified role\n"
             f"> `!setwelcome #channel` — Set welcome channel\n"
-            f"> `!scrim_setup @Role <slots>` — Setup scrim registration\n"
-            f"> `!resetuser @user` — Reset a user's verification data\n"
+            f"> `!resetuser @user` — Reset a user's verification data\n\n"
+            f"**🏆 Scrim Admin Commands**\n\n"
+            f"> `!scrim_setup @Role <slots>` — Setup scrim registration panel\n"
+            f"> `!open` — Manually unlock the registration button\n"
+            f"> `!close` — Manually lock the registration button\n"
+            f"> `!announce @Role [msg]` — Announce registration is open\n"
         )
 
     embed.description += f"\n{Theme.SEP}"
