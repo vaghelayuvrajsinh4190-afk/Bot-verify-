@@ -8,17 +8,28 @@ import datetime
 from PIL import Image
 import imagehash
 from threading import Thread
-from flask import Flask
+from flask import Flask, render_template
 
 # ═══════════════════════════════════════════════════════════
 #  1. WEB SERVICE KEEP ALIVE (ORIGINAL — PRESERVED)
 # ═══════════════════════════════════════════════════════════
 
-app = Flask('')
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Mack Bot is Alive!"
+    s = data.get("stats", {})
+    verified = len(data.get("verified_users", []))
+    approved = len(data.get("approved_users", []))
+    rejected = len(data.get("rejected_users", []))
+    teams = len(data.get("team_names", {}))
+    pending = verified - approved - rejected
+    
+    return render_template('index.html', 
+                           submissions=s.get("total_submissions", 0),
+                           approved=approved, 
+                           pending=pending, 
+                           teams=teams)
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -114,17 +125,17 @@ data = load_data()
 # ═══════════════════════════════════════════════════════════
 
 class Theme:
-    SUCCESS  = discord.Color.from_rgb(87, 242, 135)
-    ERROR    = discord.Color.from_rgb(237, 66, 69)
-    WARNING  = discord.Color.from_rgb(254, 231, 92)
-    INFO     = discord.Color.from_rgb(88, 101, 242)
-    PREMIUM  = discord.Color.from_rgb(167, 139, 250)
-    ACCENT   = discord.Color.from_rgb(45, 136, 255)
-    TEAL     = discord.Color.from_rgb(30, 224, 188)
+    SUCCESS  = discord.Color.from_rgb(0, 255, 170)   # Cyber Teal
+    ERROR    = discord.Color.from_rgb(255, 42, 85)   # Neon Crimson
+    WARNING  = discord.Color.from_rgb(255, 184, 0)   # Vivid Gold
+    INFO     = discord.Color.from_rgb(0, 195, 255)   # Electric Blue
+    PREMIUM  = discord.Color.from_rgb(180, 0, 255)   # Deep Purple
+    ACCENT   = discord.Color.from_rgb(138, 43, 226)  # Blue Violet
+    TEAL     = discord.Color.from_rgb(0, 255, 204)   # Bright Teal
     GOLD     = discord.Color.from_rgb(255, 215, 0)
-    SEP      = "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
-    THIN_SEP = "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈"
-    FOOTER   = "⚡ Mack Bot │ Verification System"
+    SEP      = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    THIN_SEP = "──────────────────────────────"
+    FOOTER   = "⚡ Mack Bot │ Premium Verification"
 
 def make_embed(title, desc=None, color=None, footer=None):
     e = discord.Embed(title=title, description=desc, color=color or Theme.INFO,
@@ -159,6 +170,19 @@ def set_cooldown(user_id):
 # ═══════════════════════════════════════════════════════════
 #  7. SCRIM REGISTRATION UI (NEW)
 # ═══════════════════════════════════════════════════════════
+
+def create_setup_embed(role_name, current_slots, max_slots):
+    return make_embed(
+        f"🎮 {role_name} — Scrim Registration",
+        f"{Theme.SEP}\n\n"
+        f"Click the button below to register!\n\n"
+        f"╭── 📋 **Info** ──╮\n"
+        f"│  🎭 **Role:** `{role_name}`\n"
+        f"│  📊 **Slots:** `{current_slots}/{max_slots}`\n"
+        f"╰──────────────╯\n\n"
+        f"⏳ *Resets daily at 12:00 AM IST*\n\n{Theme.SEP}",
+        Theme.ACCENT, "🎮 Scrim Registration Panel"
+    )
 
 class RegistrationModal(ui.Modal, title='Scrim Registration'):
     team_name = ui.TextInput(label='Team Name', style=discord.TextStyle.short, required=True)
@@ -196,7 +220,25 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
                 embed=make_embed("❌ Error", "Bot lacks permission to assign roles.", Theme.ERROR),
                 ephemeral=True)
 
-        slots_left = max_slots - len(role.members)
+        if "teams" not in channel_data:
+            channel_data["teams"] = []
+        channel_data["teams"].append({
+            "team_name": self.team_name.value,
+            "leader": self.discord_tag.value
+        })
+        save_scrim_config(scrim_config)
+
+        current_slots = len(role.members)
+        setup_msg_id = channel_data.get("setup_message_id")
+        if setup_msg_id:
+            try:
+                setup_msg = await interaction.channel.fetch_message(setup_msg_id)
+                updated_embed = create_setup_embed(role.name, current_slots, max_slots)
+                await setup_msg.edit(embed=updated_embed)
+            except discord.NotFound:
+                pass
+
+        slots_left = max_slots - current_slots
         success_embed = make_embed(
             "✅ Scrim Registration Successful",
             f"{Theme.SEP}\n\n"
@@ -225,6 +267,11 @@ class RegisterView(ui.View):
         if not channel_data:
             return await interaction.response.send_message(
                 embed=make_embed("⚠️ Error", "Admin has not set up this channel.", Theme.ERROR),
+                ephemeral=True)
+
+        if not channel_data.get("is_open", True):
+            return await interaction.response.send_message(
+                embed=make_embed("🔒 Locked", "Registration is currently closed.", Theme.ERROR),
                 ephemeral=True)
 
         role_id = channel_data["role_id"]
@@ -795,22 +842,113 @@ async def scrim_setup(ctx, role: discord.Role, slots: int):
         return
 
     scrim_config = load_scrim_config()
-    scrim_config[str(ctx.channel.id)] = {"role_id": role.id, "max_slots": slots}
-    save_scrim_config(scrim_config)
+    
+    embed = create_setup_embed(role.name, 0, slots)
+    msg = await ctx.send(embed=embed, view=RegisterView())
 
-    embed = make_embed(
-        f"🎮 {role.name} — Scrim Registration",
-        f"{Theme.SEP}\n\n"
-        f"Click the button below to register!\n\n"
-        f"╭── 📋 **Info** ──╮\n"
-        f"│  🎭 **Role:** `{role.name}`\n"
-        f"│  📊 **Slots:** `0/{slots}`\n"
-        f"╰──────────────╯\n\n"
-        f"⏳ *Resets daily at 12:00 AM IST*\n\n{Theme.SEP}",
-        Theme.ACCENT, "🎮 Scrim Registration Panel"
-    )
-    await ctx.send(embed=embed, view=RegisterView())
+    scrim_config[str(ctx.channel.id)] = {
+        "role_id": role.id,
+        "max_slots": slots,
+        "setup_message_id": msg.id,
+        "teams": [],
+        "is_open": True
+    }
+    save_scrim_config(scrim_config)
+    
     await ctx.message.delete()
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def open(ctx):
+    """Manually unlock the registration button."""
+    scrim_config = load_scrim_config()
+    channel_data = scrim_config.get(str(ctx.channel.id))
+    if not channel_data:
+        return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
+    
+    channel_data["is_open"] = True
+    save_scrim_config(scrim_config)
+    await ctx.send(embed=make_embed("🔓 Unlocked", "Registration is now open.", Theme.SUCCESS))
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def close(ctx):
+    """Manually lock the registration button."""
+    scrim_config = load_scrim_config()
+    channel_data = scrim_config.get(str(ctx.channel.id))
+    if not channel_data:
+        return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
+    
+    channel_data["is_open"] = False
+    save_scrim_config(scrim_config)
+    await ctx.send(embed=make_embed("🔒 Locked", "Registration is now closed.", Theme.ERROR))
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def announce(ctx, role: discord.Role, *, message: str = "Registration is now open! Grab your slots before they fill up."):
+    """Announce scrims are open and ping a role. Usage: !announce @Role [message]"""
+    await ctx.message.delete()
+    
+    embed = make_embed(
+        "📢 Scrim Announcement",
+        f"{Theme.SEP}\n\n"
+        f"{message}\n\n"
+        f"{Theme.SEP}",
+        Theme.GOLD
+    )
+    
+    await ctx.send(content=f"{role.mention}", embed=embed)
+
+@bot.command()
+async def list(ctx):
+    """Shows the live roster formatted as a clean code block."""
+    scrim_config = load_scrim_config()
+    channel_data = scrim_config.get(str(ctx.channel.id))
+    
+    if not channel_data:
+        return await ctx.send("⚠️ This channel is not set up for registration.")
+        
+    role_id = channel_data["role_id"]
+    max_slots = channel_data["max_slots"]
+    role = ctx.guild.get_role(role_id)
+    
+    registered_teams = channel_data.get("teams", [])
+    current_filled = len(registered_teams)
+    
+    status_icon = "🟢" if current_filled < max_slots else "🔴"
+    status_text = "Slots Open" if current_filled < max_slots else "Registration Full"
+    
+    bar_length = 10
+    filled_length = int(round(bar_length * current_filled / float(max_slots))) if max_slots > 0 else 0
+    progress_bar = ("▰" * filled_length) + ("▱" * (bar_length - filled_length))
+    
+    description_header = f"{status_icon} {status_text} • **{current_filled}/{max_slots}** slots filled\n`{progress_bar}`\n\n"
+    
+    list_content = "```text\n"
+    list_content += "##   |  TEAM NAME\n"
+    list_content += "—————|————————————————————————\n"
+    
+    for i in range(max_slots):
+        slot_num = str(i + 1).zfill(2)
+        
+        if i < current_filled:
+            team = registered_teams[i]
+            team_name = team['team_name']
+            if len(team_name) > 20:
+                team_name = team_name[:17] + "..."
+            list_content += f"{slot_num}   |  ◇  {team_name}\n"
+        else:
+            list_content += f"{slot_num}   |  ◇  — Open —\n"
+            
+    list_content += "```"
+    
+    embed = discord.Embed(
+        title=f"🏆 {role.name if role else 'MATCH'} — Live Roster",
+        description=description_header + list_content,
+        color=discord.Color.brand_green() if current_filled < max_slots else discord.Color.red()
+    )
+    embed.set_footer(text="🔄 Auto-updates • Do not type here")
+    await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
 #  16. HELP COMMAND (NEW — beautiful embed)
