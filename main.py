@@ -47,24 +47,23 @@ def keep_alive():
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
-intents.members = True  # NEW: needed for welcome message + auto-role
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command("help")  # NEW: custom help command
+bot.remove_command("help")
 
 # ═══════════════════════════════════════════════════════════
-#  3. CHANNEL IDs (ORIGINAL — PRESERVED)
+#  3. CHANNEL IDs
 # ═══════════════════════════════════════════════════════════
 
 VERIFY_HERE_CHANNEL_ID   = 1508730526532501504
 MOD_LOG_CHANNEL_ID       = 1508761687233269861
 SYNDICATE_VERIFY_CHANNEL = 1461666929516347453
-TEAM_NAME_CHANNEL_ID     = 1508730691964244041  # Added Step 4 Channel
+TEAM_NAME_CHANNEL_ID     = 1508730691964244041
 
-# NEW: Configurable role ID (set via !setrole or hardcode yours here)
-VERIFIED_ROLE_ID = None  # Will be loaded from data.json
+VERIFIED_ROLE_ID = None
 
 # ═══════════════════════════════════════════════════════════
-#  4. PERSISTENT DATA (NEW — replaces in-memory set)
+#  4. PERSISTENT DATA
 # ═══════════════════════════════════════════════════════════
 
 DATA_FILE = "data.json"
@@ -74,7 +73,6 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
-            # Migration: ensure all keys exist
             defaults = {
                 "verified_users": [],
                 "approved_users": [],
@@ -121,17 +119,17 @@ def save_scrim_config(config):
 data = load_data()
 
 # ═══════════════════════════════════════════════════════════
-#  5. DESIGN SYSTEM (NEW — beautiful embeds)
+#  5. DESIGN SYSTEM
 # ═══════════════════════════════════════════════════════════
 
 class Theme:
-    SUCCESS  = discord.Color.from_rgb(0, 255, 170)   # Cyber Teal
-    ERROR    = discord.Color.from_rgb(255, 42, 85)   # Neon Crimson
-    WARNING  = discord.Color.from_rgb(255, 184, 0)   # Vivid Gold
-    INFO     = discord.Color.from_rgb(0, 195, 255)   # Electric Blue
-    PREMIUM  = discord.Color.from_rgb(180, 0, 255)   # Deep Purple
-    ACCENT   = discord.Color.from_rgb(138, 43, 226)  # Blue Violet
-    TEAL     = discord.Color.from_rgb(0, 255, 204)   # Bright Teal
+    SUCCESS  = discord.Color.from_rgb(0, 255, 170)
+    ERROR    = discord.Color.from_rgb(255, 42, 85)
+    WARNING  = discord.Color.from_rgb(255, 184, 0)
+    INFO     = discord.Color.from_rgb(0, 195, 255)
+    PREMIUM  = discord.Color.from_rgb(180, 0, 255)
+    ACCENT   = discord.Color.from_rgb(138, 43, 226)
+    TEAL     = discord.Color.from_rgb(0, 255, 204)
     GOLD     = discord.Color.from_rgb(255, 215, 0)
     SEP      = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     THIN_SEP = "──────────────────────────────"
@@ -144,13 +142,12 @@ def make_embed(title, desc=None, color=None, footer=None):
     return e
 
 # ═══════════════════════════════════════════════════════════
-#  6. ANTI-SPAM / COOLDOWN SYSTEM (NEW)
+#  6. ANTI-SPAM / COOLDOWN SYSTEM
 # ═══════════════════════════════════════════════════════════
 
-COOLDOWN_SECONDS = 60  # 1 minute between submissions
+COOLDOWN_SECONDS = 60
 
 def check_cooldown(user_id):
-    """Returns (is_on_cooldown, seconds_remaining)"""
     uid = str(user_id)
     cooldowns = data.get("cooldowns", {})
     if uid in cooldowns:
@@ -168,7 +165,7 @@ def set_cooldown(user_id):
     save_data()
 
 # ═══════════════════════════════════════════════════════════
-#  7. SCRIM REGISTRATION UI (NEW)
+#  7. SCRIM REGISTRATION UI
 # ═══════════════════════════════════════════════════════════
 
 def create_setup_embed(role_name, current_slots, max_slots):
@@ -183,6 +180,64 @@ def create_setup_embed(role_name, current_slots, max_slots):
         f"⏳ *Resets daily at 12:00 AM IST*\n\n{Theme.SEP}",
         Theme.ACCENT, "🎮 Scrim Registration Panel"
     )
+
+def build_roster_embed(role_name, teams, max_slots):
+    """Reusable roster embed builder — used by !list and auto-update."""
+    current_filled = len(teams)
+    status_icon = "🟢" if current_filled < max_slots else "🔴"
+    status_text = "Slots Open" if current_filled < max_slots else "Registration Full"
+
+    bar_length = 10
+    filled_length = int(round(bar_length * current_filled / float(max_slots))) if max_slots > 0 else 0
+    progress_bar = ("▰" * filled_length) + ("▱" * (bar_length - filled_length))
+
+    description_header = f"{status_icon} {status_text} • **{current_filled}/{max_slots}** slots filled\n`{progress_bar}`\n\n"
+
+    list_content = "```text\n"
+    list_content += "##   |  TEAM NAME\n"
+    list_content += "—————|————————————————————————\n"
+
+    for i in range(max_slots):
+        slot_num = str(i + 1).zfill(2)
+        if i < current_filled:
+            team = teams[i]
+            team_name = team['team_name']
+            if len(team_name) > 20:
+                team_name = team_name[:17] + "..."
+            list_content += f"{slot_num}   |  ◇  {team_name}\n"
+        else:
+            list_content += f"{slot_num}   |  ◇  — Open —\n"
+
+    list_content += "```"
+
+    embed = discord.Embed(
+        title=f"🏆 {role_name} — Live Roster",
+        description=description_header + list_content,
+        color=discord.Color.brand_green() if current_filled < max_slots else discord.Color.red()
+    )
+    embed.set_footer(text="🔄 Auto-updates • Do not type here")
+    return embed
+
+
+async def update_list_message(ctx_or_channel, channel_data, scrim_config):
+    """Fetch the stored list message and edit it with fresh roster data."""
+    list_msg_id = channel_data.get("list_message_id")
+    if not list_msg_id:
+        return
+
+    role = ctx_or_channel.guild.get_role(channel_data["role_id"])
+    role_name = role.name if role else "MATCH"
+    teams = channel_data.get("teams", [])
+    max_slots = channel_data["max_slots"]
+
+    try:
+        channel = ctx_or_channel if isinstance(ctx_or_channel, discord.TextChannel) else ctx_or_channel.channel
+        list_msg = await channel.fetch_message(list_msg_id)
+        await list_msg.edit(embed=build_roster_embed(role_name, teams, max_slots))
+    except discord.NotFound:
+        # Message was deleted — clear stored ID
+        channel_data["list_message_id"] = None
+        save_scrim_config(scrim_config)
 
 class RegistrationModal(ui.Modal, title='Scrim Registration'):
     team_name = ui.TextInput(label='Team Name', style=discord.TextStyle.short, required=True)
@@ -206,7 +261,6 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
                 embed=make_embed("❌ Error", "Configured role not found. Contact an admin.", Theme.ERROR),
                 ephemeral=True)
 
-        # Race Condition Check
         if len(channel_data.get("teams", [])) >= max_slots:
             return await interaction.response.send_message(
                 embed=make_embed("❌ Registration Full",
@@ -230,6 +284,8 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
         save_scrim_config(scrim_config)
 
         current_slots = len(channel_data.get("teams", []))
+
+        # Update panel embed
         setup_msg_id = channel_data.get("setup_message_id")
         if setup_msg_id:
             try:
@@ -238,6 +294,16 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
                 await setup_msg.edit(embed=updated_embed)
             except discord.NotFound:
                 pass
+
+        # Auto-update list message
+        list_msg_id = channel_data.get("list_message_id")
+        if list_msg_id:
+            try:
+                list_msg = await interaction.channel.fetch_message(list_msg_id)
+                await list_msg.edit(embed=build_roster_embed(role.name, channel_data["teams"], max_slots))
+            except discord.NotFound:
+                channel_data["list_message_id"] = None
+                save_scrim_config(scrim_config)
 
         slots_left = max_slots - current_slots
         success_embed = make_embed(
@@ -300,9 +366,8 @@ class RegisterView(ui.View):
 @bot.event
 async def on_ready():
     print(f'✅ {bot.user.name} is online!')
-    bot.add_view(RegisterView())  # NEW: persistent scrim button
+    bot.add_view(RegisterView())
 
-    # ORIGINAL — channel validation (PRESERVED)
     missing = []
     if not bot.get_channel(VERIFY_HERE_CHANNEL_ID):
         missing.append(f"VERIFY_HERE_CHANNEL_ID ({VERIFY_HERE_CHANNEL_ID})")
@@ -318,7 +383,6 @@ async def on_ready():
     else:
         print("✅ All channels verified.")
 
-    # NEW: start midnight reset task
     if not midnight_reset.is_running():
         midnight_reset.start()
 
@@ -326,8 +390,7 @@ async def on_ready():
     print(f"🚫 {len(data['blacklisted_users'])} blacklisted users loaded.")
 
 # ═══════════════════════════════════════════════════════════
-#  9. ON_MESSAGE — SCREENSHOT + TEAM NAME (ORIGINAL — PRESERVED)
-#     + NEW: Blacklist check, cooldown, auto-role, persistent storage
+#  9. ON_MESSAGE
 # ═══════════════════════════════════════════════════════════
 
 @bot.event
@@ -335,12 +398,8 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # ==========================================
-    # STEP 2: SCREENSHOT VERIFICATION (ORIGINAL — PRESERVED)
-    # ==========================================
     if message.channel.id == VERIFY_HERE_CHANNEL_ID:
 
-        # NEW: Blacklist check
         if str(message.author.id) in data["blacklisted_users"]:
             embed = make_embed(
                 "🚫 Blacklisted",
@@ -382,7 +441,6 @@ async def on_message(message):
             await message.delete()
             return
 
-        # NEW: Cooldown check
         on_cooldown, remaining = check_cooldown(message.author.id)
         if on_cooldown:
             embed = make_embed(
@@ -452,7 +510,6 @@ async def on_message(message):
         )
         await log_channel.send(embed=log_embed, files=files_to_send)
 
-        # MODIFIED: persistent storage instead of in-memory set
         data["verified_users"].append(str(message.author.id))
         data["stats"]["total_submissions"] += 1
         set_cooldown(message.author.id)
@@ -460,7 +517,6 @@ async def on_message(message):
 
         await message.delete()
 
-        # NEW: Auto-role assignment
         verified_role_id = data.get("verified_role_id")
         if verified_role_id and message.guild:
             role = message.guild.get_role(int(verified_role_id))
@@ -477,12 +533,8 @@ async def on_message(message):
         )
         await message.channel.send(embed=success_embed, delete_after=30)
 
-    # ==========================================
-    # STEP 4: TEAM NAME VERIFICATION (ORIGINAL — PRESERVED)
-    # ==========================================
     elif message.channel.id == TEAM_NAME_CHANNEL_ID:
 
-        # NEW: Blacklist check
         if str(message.author.id) in data["blacklisted_users"]:
             embed = make_embed(
                 "🚫 Blacklisted",
@@ -493,7 +545,6 @@ async def on_message(message):
             await message.delete()
             return
 
-        # Block images in the text-only channel (ORIGINAL)
         if len(message.attachments) > 0:
             if not message.author.guild_permissions.administrator:
                 embed = discord.Embed(
@@ -507,7 +558,6 @@ async def on_message(message):
 
         team_name_text = message.content
 
-        # Forward the team name to the mod log (ORIGINAL)
         try:
             log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID) or await bot.fetch_channel(MOD_LOG_CHANNEL_ID)
             log_embed = discord.Embed(
@@ -519,14 +569,12 @@ async def on_message(message):
         except Exception as e:
             print(f"❌ Cannot access MOD_LOG_CHANNEL: {e}")
 
-        # NEW: Save team name to persistent storage
         data["team_names"][str(message.author.id)] = {
             "name": team_name_text,
             "submitted_at": datetime.datetime.utcnow().isoformat()
         }
         save_data()
 
-        # Send confirmation to the player and delete their message (ORIGINAL)
         success_embed = discord.Embed(
             title="✅ Team Name Registered",
             description=f"Got it, {message.author.mention}!\nYour team **{team_name_text}** is now pending final mod review.",
@@ -538,14 +586,13 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ═══════════════════════════════════════════════════════════
-#  10. WELCOME MESSAGE (NEW)
+#  10. WELCOME MESSAGE
 # ═══════════════════════════════════════════════════════════
 
 @bot.event
 async def on_member_join(member):
     welcome_channel_id = data.get("welcome_channel_id")
 
-    # Try to DM the user with instructions
     try:
         dm_embed = make_embed(
             f"👋 Welcome to {member.guild.name}!",
@@ -562,9 +609,8 @@ async def on_member_join(member):
         )
         await member.send(embed=dm_embed)
     except discord.Forbidden:
-        pass  # DMs disabled
+        pass
 
-    # Also post in welcome channel if configured
     if welcome_channel_id:
         channel = member.guild.get_channel(int(welcome_channel_id))
         if channel:
@@ -577,13 +623,12 @@ async def on_member_join(member):
             await channel.send(embed=welcome_embed, delete_after=60)
 
 # ═══════════════════════════════════════════════════════════
-#  11. MOD COMMANDS (NEW)
+#  11. MOD COMMANDS
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def approve(ctx, member: discord.Member):
-    """Approve a user's verification. Usage: !approve @user"""
     uid = str(member.id)
 
     if uid in data["approved_users"]:
@@ -591,7 +636,6 @@ async def approve(ctx, member: discord.Member):
             f"{member.mention} was already approved.", Theme.WARNING))
         return
 
-    # Remove from rejected if they were rejected before
     if uid in data["rejected_users"]:
         data["rejected_users"].remove(uid)
 
@@ -599,7 +643,6 @@ async def approve(ctx, member: discord.Member):
     data["stats"]["total_approved"] += 1
     save_data()
 
-    # Assign verified role if configured
     verified_role_id = data.get("verified_role_id")
     if verified_role_id:
         role = ctx.guild.get_role(int(verified_role_id))
@@ -618,7 +661,6 @@ async def approve(ctx, member: discord.Member):
     )
     await ctx.send(embed=embed)
 
-    # Log to mod channel
     try:
         log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_channel:
@@ -626,7 +668,6 @@ async def approve(ctx, member: discord.Member):
     except Exception:
         pass
 
-    # DM the user
     try:
         dm_embed = make_embed("✅ You've Been Approved!",
             f"Your verification in **{ctx.guild.name}** has been approved! 🎉",
@@ -639,10 +680,8 @@ async def approve(ctx, member: discord.Member):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def reject(ctx, member: discord.Member, *, reason: str = "No reason provided"):
-    """Reject a user's verification. Usage: !reject @user [reason]"""
     uid = str(member.id)
 
-    # Remove from verified/approved
     if uid in data["verified_users"]:
         data["verified_users"].remove(uid)
     if uid in data["approved_users"]:
@@ -663,7 +702,6 @@ async def reject(ctx, member: discord.Member, *, reason: str = "No reason provid
     )
     await ctx.send(embed=embed)
 
-    # Log
     try:
         log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_channel:
@@ -671,7 +709,6 @@ async def reject(ctx, member: discord.Member, *, reason: str = "No reason provid
     except Exception:
         pass
 
-    # DM the user
     try:
         dm_embed = make_embed("❌ Verification Rejected",
             f"Your verification in **{ctx.guild.name}** was rejected.\n**Reason:** {reason}\n\n"
@@ -682,13 +719,12 @@ async def reject(ctx, member: discord.Member, *, reason: str = "No reason provid
         pass
 
 # ═══════════════════════════════════════════════════════════
-#  12. BLACKLIST SYSTEM (NEW)
+#  12. BLACKLIST SYSTEM
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def blacklist(ctx, member: discord.Member, *, reason: str = "No reason provided"):
-    """Permanently block a user. Usage: !blacklist @user [reason]"""
     uid = str(member.id)
     if uid in data["blacklisted_users"]:
         await ctx.send(embed=make_embed("⚠️ Already Blacklisted",
@@ -719,7 +755,6 @@ async def blacklist(ctx, member: discord.Member, *, reason: str = "No reason pro
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def unblacklist(ctx, member: discord.Member):
-    """Remove a user from the blacklist. Usage: !unblacklist @user"""
     uid = str(member.id)
     if uid not in data["blacklisted_users"]:
         await ctx.send(embed=make_embed("⚠️ Not Blacklisted",
@@ -737,12 +772,11 @@ async def unblacklist(ctx, member: discord.Member):
     await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  13. STATUS COMMAND (NEW)
+#  13. STATUS COMMAND
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 async def status(ctx):
-    """Check your verification progress. Usage: !status"""
     uid = str(ctx.author.id)
 
     if uid in data["blacklisted_users"]:
@@ -775,13 +809,12 @@ async def status(ctx):
     await ctx.send(embed=embed, delete_after=30)
 
 # ═══════════════════════════════════════════════════════════
-#  14. STATS COMMAND (NEW)
+#  14. STATS COMMAND
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def stats(ctx):
-    """View verification statistics. Usage: !stats"""
     s = data["stats"]
     total_verified = len(data["verified_users"])
     total_approved = len(data["approved_users"])
@@ -807,13 +840,12 @@ async def stats(ctx):
     await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  15. CONFIGURATION COMMANDS (NEW)
+#  15. CONFIGURATION COMMANDS
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setrole(ctx, role: discord.Role):
-    """Set the verified role. Usage: !setrole @Role"""
     data["verified_role_id"] = str(role.id)
     save_data()
     embed = make_embed("✅ Verified Role Set",
@@ -825,7 +857,6 @@ async def setrole(ctx, role: discord.Role):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setwelcome(ctx, channel: discord.TextChannel):
-    """Set the welcome channel. Usage: !setwelcome #channel"""
     data["welcome_channel_id"] = str(channel.id)
     save_data()
     embed = make_embed("✅ Welcome Channel Set",
@@ -837,13 +868,12 @@ async def setwelcome(ctx, channel: discord.TextChannel):
 @bot.command(name="scrim_setup")
 @commands.has_permissions(administrator=True)
 async def scrim_setup(ctx, role: discord.Role, slots: int):
-    """Set up scrim registration in the current channel. Usage: !scrim_setup @Role <slots>"""
     if slots < 1 or slots > 100:
         await ctx.send(embed=make_embed("❌ Invalid Slots", "Must be between 1 and 100.", Theme.ERROR))
         return
 
     scrim_config = load_scrim_config()
-    
+
     embed = create_setup_embed(role.name, 0, slots)
     msg = await ctx.send(embed=embed, view=RegisterView())
 
@@ -855,42 +885,41 @@ async def scrim_setup(ctx, role: discord.Role, slots: int):
         "is_open": True
     }
     save_scrim_config(scrim_config)
-    
     await ctx.message.delete()
+
 
 @bot.command(name="open")
 @commands.has_permissions(administrator=True)
 async def cmd_open(ctx):
-    """Manually unlock the registration button."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
-    
+
     channel_data["is_open"] = True
     save_scrim_config(scrim_config)
     await ctx.send(embed=make_embed("🔓 Unlocked", "Registration is now open.", Theme.SUCCESS))
 
+
 @bot.command(name="close")
 @commands.has_permissions(administrator=True)
 async def cmd_close(ctx):
-    """Manually lock the registration button."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
-    
+
     channel_data["is_open"] = False
     save_scrim_config(scrim_config)
     await ctx.send(embed=make_embed("🔒 Locked", "Registration is now closed.", Theme.ERROR))
 
+
 @bot.command(name="wipe")
 @commands.has_permissions(administrator=True)
 async def cmd_wipe(ctx):
-    """Manually wipe the scrim roster for the current channel."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
-    
+
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
 
@@ -901,11 +930,11 @@ async def cmd_wipe(ctx):
                 await member.remove_roles(role)
             except discord.Forbidden:
                 pass
-                
+
     channel_data["teams"] = []
     save_scrim_config(scrim_config)
-    
-    # Update the setup message
+
+    # Update panel embed
     setup_msg_id = channel_data.get("setup_message_id")
     if setup_msg_id:
         try:
@@ -915,27 +944,30 @@ async def cmd_wipe(ctx):
         except discord.NotFound:
             pass
 
-    await ctx.send(embed=make_embed("🧹 Roster Wiped", "All teams have been cleared and roles removed. The panel is reset to 0.", Theme.SUCCESS))
+    # Auto-update list message
+    await update_list_message(ctx, channel_data, scrim_config)
+
+    await ctx.send(embed=make_embed("🧹 Roster Wiped",
+        "All teams cleared, roles removed, panel reset to 0.", Theme.SUCCESS))
+
 
 @bot.command(name="removeslot")
 @commands.has_permissions(administrator=True)
 async def cmd_removeslot(ctx, slot: int):
-    """Manually remove a specific team from a slot (e.g., !removeslot 3)."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
-    
+
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
 
     teams = channel_data.get("teams", [])
     if slot < 1 or slot > len(teams):
-        return await ctx.send(embed=make_embed("❌ Error", f"Invalid slot number. Must be between 1 and {len(teams)}.", Theme.ERROR))
+        return await ctx.send(embed=make_embed("❌ Error",
+            f"Invalid slot number. Must be between 1 and {len(teams)}.", Theme.ERROR))
 
-    # Get the team and user ID
     removed_team = teams.pop(slot - 1)
     user_id = removed_team.get("user_id")
 
-    # Remove the role if we have the user ID
     if user_id:
         role = ctx.guild.get_role(channel_data["role_id"])
         if role:
@@ -947,94 +979,64 @@ async def cmd_removeslot(ctx, slot: int):
                     pass
 
     save_scrim_config(scrim_config)
-    
-    # Update the panel message
+
+    # Update panel embed
+    role = ctx.guild.get_role(channel_data["role_id"])
     setup_msg_id = channel_data.get("setup_message_id")
     if setup_msg_id:
         try:
             setup_msg = await ctx.channel.fetch_message(setup_msg_id)
-            role = ctx.guild.get_role(channel_data["role_id"])
             updated_embed = create_setup_embed(role.name if role else "Scrim", len(teams), channel_data["max_slots"])
             await setup_msg.edit(embed=updated_embed)
         except discord.NotFound:
             pass
 
-    await ctx.send(embed=make_embed("🗑️ Slot Removed", f"Successfully removed **{removed_team['team_name']}** from Slot {slot}.", Theme.SUCCESS))
+    # ── Auto-update live roster embed ──
+    await update_list_message(ctx, channel_data, scrim_config)
+
+    await ctx.send(embed=make_embed("🗑️ Slot Removed",
+        f"Successfully removed **{removed_team['team_name']}** from Slot {slot}.", Theme.SUCCESS))
+
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def announce(ctx, role: discord.Role, *, message: str = "Registration is now open! Grab your slots before they fill up."):
-    """Announce scrims are open and ping a role. Usage: !announce @Role [message]"""
     await ctx.message.delete()
-    
     embed = make_embed(
         "📢 Scrim Announcement",
-        f"{Theme.SEP}\n\n"
-        f"{message}\n\n"
-        f"{Theme.SEP}",
+        f"{Theme.SEP}\n\n{message}\n\n{Theme.SEP}",
         Theme.GOLD
     )
-    
     await ctx.send(content=f"{role.mention}", embed=embed)
+
 
 @bot.command(name="list")
 async def cmd_list(ctx):
-    """Shows the live roster formatted as a clean code block."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
-    
+
     if not channel_data:
         return await ctx.send("⚠️ This channel is not set up for registration.")
-        
+
     role_id = channel_data["role_id"]
-    max_slots = channel_data["max_slots"]
     role = ctx.guild.get_role(role_id)
-    
-    registered_teams = channel_data.get("teams", [])
-    current_filled = len(registered_teams)
-    
-    status_icon = "🟢" if current_filled < max_slots else "🔴"
-    status_text = "Slots Open" if current_filled < max_slots else "Registration Full"
-    
-    bar_length = 10
-    filled_length = int(round(bar_length * current_filled / float(max_slots))) if max_slots > 0 else 0
-    progress_bar = ("▰" * filled_length) + ("▱" * (bar_length - filled_length))
-    
-    description_header = f"{status_icon} {status_text} • **{current_filled}/{max_slots}** slots filled\n`{progress_bar}`\n\n"
-    
-    list_content = "```text\n"
-    list_content += "##   |  TEAM NAME\n"
-    list_content += "—————|————————————————————————\n"
-    
-    for i in range(max_slots):
-        slot_num = str(i + 1).zfill(2)
-        
-        if i < current_filled:
-            team = registered_teams[i]
-            team_name = team['team_name']
-            if len(team_name) > 20:
-                team_name = team_name[:17] + "..."
-            list_content += f"{slot_num}   |  ◇  {team_name}\n"
-        else:
-            list_content += f"{slot_num}   |  ◇  — Open —\n"
-            
-    list_content += "```"
-    
-    embed = discord.Embed(
-        title=f"🏆 {role.name if role else 'MATCH'} — Live Roster",
-        description=description_header + list_content,
-        color=discord.Color.brand_green() if current_filled < max_slots else discord.Color.red()
-    )
-    embed.set_footer(text="🔄 Auto-updates • Do not type here")
-    await ctx.send(embed=embed)
+    teams = channel_data.get("teams", [])
+    max_slots = channel_data["max_slots"]
+    role_name = role.name if role else "MATCH"
+
+    embed = build_roster_embed(role_name, teams, max_slots)
+    msg = await ctx.send(embed=embed)
+
+    # ── Store list message ID for auto-update ──
+    channel_data["list_message_id"] = msg.id
+    save_scrim_config(scrim_config)
 
 # ═══════════════════════════════════════════════════════════
-#  16. HELP COMMAND (NEW — beautiful embed)
+#  16. HELP COMMAND
 # ═══════════════════════════════════════════════════════════
 
 @bot.command(name="help")
 async def cmd_help(ctx):
-    """Show all available commands."""
     is_admin = ctx.author.guild_permissions.administrator
 
     embed = make_embed(
@@ -1078,13 +1080,12 @@ async def cmd_help(ctx):
     await ctx.send(embed=embed, delete_after=120)
 
 # ═══════════════════════════════════════════════════════════
-#  17. UTILITY COMMANDS (NEW)
+#  17. UTILITY COMMANDS
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def resetuser(ctx, member: discord.Member):
-    """Reset a user's verification data. Usage: !resetuser @user"""
     uid = str(member.id)
     changed = False
 
@@ -1114,7 +1115,7 @@ async def resetuser(ctx, member: discord.Member):
     await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  18. MIDNIGHT RESET TASK (NEW — resets scrim roles daily)
+#  18. MIDNIGHT RESET TASK
 # ═══════════════════════════════════════════════════════════
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1122,13 +1123,12 @@ MIDNIGHT_IST = datetime.time(hour=0, minute=0, second=0, tzinfo=IST)
 
 @tasks.loop(time=MIDNIGHT_IST)
 async def midnight_reset():
-    """Reset scrim registration roles at midnight IST."""
     print("🕛 MIDNIGHT RESET: Cleaning up scrim roles...")
     scrim_config = load_scrim_config()
 
     for channel_id_str, channel_data in scrim_config.items():
         channel_data["teams"] = []
-        
+
         for guild in bot.guilds:
             role = guild.get_role(channel_data["role_id"])
             if role:
@@ -1137,8 +1137,7 @@ async def midnight_reset():
                         await member.remove_roles(role)
                     except discord.Forbidden:
                         pass
-                
-                # Reset the panel message
+
                 try:
                     channel = guild.get_channel(int(channel_id_str))
                     if channel:
@@ -1147,10 +1146,20 @@ async def midnight_reset():
                         await setup_msg.edit(embed=updated_embed)
                 except Exception:
                     pass
-                    
+
+                # Auto-update list message on midnight reset
+                list_msg_id = channel_data.get("list_message_id")
+                if list_msg_id:
+                    try:
+                        channel = guild.get_channel(int(channel_id_str))
+                        if channel:
+                            list_msg = await channel.fetch_message(list_msg_id)
+                            await list_msg.edit(embed=build_roster_embed(role.name, [], channel_data["max_slots"]))
+                    except Exception:
+                        pass
+
     save_scrim_config(scrim_config)
 
-    # Clean up old cooldowns (older than 24h)
     now = datetime.datetime.utcnow()
     expired = []
     for uid, ts in data.get("cooldowns", {}).items():
@@ -1167,7 +1176,7 @@ async def midnight_reset():
     print("✅ Midnight reset complete.")
 
 # ═══════════════════════════════════════════════════════════
-#  19. ERROR HANDLER (NEW)
+#  19. ERROR HANDLER
 # ═══════════════════════════════════════════════════════════
 
 @bot.event
@@ -1196,7 +1205,7 @@ async def on_command_error(ctx, error):
     print(f"[ERROR] {error}")
 
 # ═══════════════════════════════════════════════════════════
-#  20. STARTUP (ORIGINAL — PRESERVED + enhanced)
+#  20. STARTUP
 # ═══════════════════════════════════════════════════════════
 
 keep_alive()
