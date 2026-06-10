@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mack Bot — Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="dashboard-container">
+        <header>
+            <div class="logo">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 17L12 22L22 17" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 12L12 17L22 12" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <h1>Mack Bot</h1>
+            </div>
+            <div class="status-badge">
+                <span class="dot"></span> Online
+            </div>
+        </header>
+
+        <main>
+            <section class="hero">
+                <h2>Verification Overview</h2>
+                <p>Live metrics from the Mack Bot verification system.</p>
+            </section>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>Total Submissions</h3>
+                    <p class="value">{{ submissions }}</p>
+                    <div class="progress-bar"><div class="fill" style="width: 100%"></div></div>
+                </div>
+
+                <div class="card highlight">
+                    <h3>Approved Players</h3>
+                    <p class="value">{{ approved }}</p>
+                    <p class="subtext">Successfully verified</p>
+                </div>
+
+                <div class="card">
+                    <h3>Pending Review</h3>
+                    <p class="value">{{ pending }}</p>
+                    <p class="subtext">Awaiting moderation</p>
+                </div>
+
+                <div class="card">
+                    <h3>Registered Teams</h3>
+                    <p class="value">{{ teams }}</p>
+                    <p class="subtext">Across all active scrims</p>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 Mack Bot. All rights reserved.</p>
+        </footer>
+    </div>
+</body>
+</html>
