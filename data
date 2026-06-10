@@ -1,0 +1,13 @@
+{
+    "verified_users": [],
+    "approved_users": [],
+    "rejected_users": [],
+    "blacklisted_users": [],
+    "team_names": {},
+    "scrim_channels": {},
+    "stats": {
+        "total_submissions": 0,
+        "total_approved": 0,
+        "total_rejected": 0
+    }
+}
