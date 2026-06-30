@@ -47,23 +47,28 @@ def keep_alive():
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
-intents.members = True
+intents.members = True  # NEW: needed for welcome message + auto-role
 bot = commands.Bot(command_prefix="!", intents=intents)
-bot.remove_command("help")
+bot.remove_command("help")  # NEW: custom help command
 
 # ═══════════════════════════════════════════════════════════
-#  3. CHANNEL IDs
+#  3. CHANNEL IDs (ORIGINAL — PRESERVED)
 # ═══════════════════════════════════════════════════════════
 
 VERIFY_HERE_CHANNEL_ID   = 1508730526532501504
 MOD_LOG_CHANNEL_ID       = 1508761687233269861
 SYNDICATE_VERIFY_CHANNEL = 1461666929516347453
-TEAM_NAME_CHANNEL_ID     = 1508730691964244041
+TEAM_NAME_CHANNEL_ID     = 1508730691964244041  # Added Step 4 Channel
 
-VERIFIED_ROLE_ID = None
+# NEW: Configurable role ID (set via !setrole or hardcode yours here)
+VERIFIED_ROLE_ID = None  # Will be loaded from data.json
+
+# Channel overwrite stale timeout (minutes) — users who don't submit
+# screenshots within this time will have their #verify-here access revoked
+OVERWRITE_TIMEOUT_MINUTES = 30
 
 # ═══════════════════════════════════════════════════════════
-#  4. PERSISTENT DATA
+#  4. PERSISTENT DATA (NEW — replaces in-memory set)
 # ═══════════════════════════════════════════════════════════
 
 DATA_FILE = "data.json"
@@ -73,6 +78,7 @@ def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
+            # Migration: ensure all keys exist
             defaults = {
                 "verified_users": [],
                 "approved_users": [],
@@ -83,7 +89,8 @@ def load_data():
                 "stats": {"total_submissions": 0, "total_approved": 0, "total_rejected": 0},
                 "verified_role_id": None,
                 "welcome_channel_id": None,
-                "cooldowns": {}
+                "cooldowns": {},
+                "pending_overwrites": {}
             }
             for key, val in defaults.items():
                 if key not in data:
@@ -99,7 +106,8 @@ def load_data():
         "stats": {"total_submissions": 0, "total_approved": 0, "total_rejected": 0},
         "verified_role_id": None,
         "welcome_channel_id": None,
-        "cooldowns": {}
+        "cooldowns": {},
+        "pending_overwrites": {}
     }
 
 def save_data():
@@ -119,17 +127,17 @@ def save_scrim_config(config):
 data = load_data()
 
 # ═══════════════════════════════════════════════════════════
-#  5. DESIGN SYSTEM
+#  5. DESIGN SYSTEM (NEW — beautiful embeds)
 # ═══════════════════════════════════════════════════════════
 
 class Theme:
-    SUCCESS  = discord.Color.from_rgb(0, 255, 170)
-    ERROR    = discord.Color.from_rgb(255, 42, 85)
-    WARNING  = discord.Color.from_rgb(255, 184, 0)
-    INFO     = discord.Color.from_rgb(0, 195, 255)
-    PREMIUM  = discord.Color.from_rgb(180, 0, 255)
-    ACCENT   = discord.Color.from_rgb(138, 43, 226)
-    TEAL     = discord.Color.from_rgb(0, 255, 204)
+    SUCCESS  = discord.Color.from_rgb(0, 255, 170)   # Cyber Teal
+    ERROR    = discord.Color.from_rgb(255, 42, 85)   # Neon Crimson
+    WARNING  = discord.Color.from_rgb(255, 184, 0)   # Vivid Gold
+    INFO     = discord.Color.from_rgb(0, 195, 255)   # Electric Blue
+    PREMIUM  = discord.Color.from_rgb(180, 0, 255)   # Deep Purple
+    ACCENT   = discord.Color.from_rgb(138, 43, 226)  # Blue Violet
+    TEAL     = discord.Color.from_rgb(0, 255, 204)   # Bright Teal
     GOLD     = discord.Color.from_rgb(255, 215, 0)
     SEP      = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     THIN_SEP = "──────────────────────────────"
@@ -142,12 +150,13 @@ def make_embed(title, desc=None, color=None, footer=None):
     return e
 
 # ═══════════════════════════════════════════════════════════
-#  6. ANTI-SPAM / COOLDOWN SYSTEM
+#  6. ANTI-SPAM / COOLDOWN SYSTEM (NEW)
 # ═══════════════════════════════════════════════════════════
 
-COOLDOWN_SECONDS = 60
+COOLDOWN_SECONDS = 60  # 1 minute between submissions
 
 def check_cooldown(user_id):
+    """Returns (is_on_cooldown, seconds_remaining)"""
     uid = str(user_id)
     cooldowns = data.get("cooldowns", {})
     if uid in cooldowns:
@@ -165,7 +174,7 @@ def set_cooldown(user_id):
     save_data()
 
 # ═══════════════════════════════════════════════════════════
-#  7. SCRIM REGISTRATION UI
+#  7. SCRIM REGISTRATION UI (NEW)
 # ═══════════════════════════════════════════════════════════
 
 def create_setup_embed(role_name, current_slots, max_slots):
@@ -180,64 +189,6 @@ def create_setup_embed(role_name, current_slots, max_slots):
         f"⏳ *Resets daily at 12:00 AM IST*\n\n{Theme.SEP}",
         Theme.ACCENT, "🎮 Scrim Registration Panel"
     )
-
-def build_roster_embed(role_name, teams, max_slots):
-    """Reusable roster embed builder — used by !list and auto-update."""
-    current_filled = len(teams)
-    status_icon = "🟢" if current_filled < max_slots else "🔴"
-    status_text = "Slots Open" if current_filled < max_slots else "Registration Full"
-
-    bar_length = 10
-    filled_length = int(round(bar_length * current_filled / float(max_slots))) if max_slots > 0 else 0
-    progress_bar = ("▰" * filled_length) + ("▱" * (bar_length - filled_length))
-
-    description_header = f"{status_icon} {status_text} • **{current_filled}/{max_slots}** slots filled\n`{progress_bar}`\n\n"
-
-    list_content = "```text\n"
-    list_content += "##   |  TEAM NAME\n"
-    list_content += "—————|————————————————————————\n"
-
-    for i in range(max_slots):
-        slot_num = str(i + 1).zfill(2)
-        if i < current_filled:
-            team = teams[i]
-            team_name = team['team_name']
-            if len(team_name) > 20:
-                team_name = team_name[:17] + "..."
-            list_content += f"{slot_num}   |  ◇  {team_name}\n"
-        else:
-            list_content += f"{slot_num}   |  ◇  — Open —\n"
-
-    list_content += "```"
-
-    embed = discord.Embed(
-        title=f"🏆 {role_name} — Live Roster",
-        description=description_header + list_content,
-        color=discord.Color.brand_green() if current_filled < max_slots else discord.Color.red()
-    )
-    embed.set_footer(text="🔄 Auto-updates • Do not type here")
-    return embed
-
-
-async def update_list_message(ctx_or_channel, channel_data, scrim_config):
-    """Fetch the stored list message and edit it with fresh roster data."""
-    list_msg_id = channel_data.get("list_message_id")
-    if not list_msg_id:
-        return
-
-    role = ctx_or_channel.guild.get_role(channel_data["role_id"])
-    role_name = role.name if role else "MATCH"
-    teams = channel_data.get("teams", [])
-    max_slots = channel_data["max_slots"]
-
-    try:
-        channel = ctx_or_channel if isinstance(ctx_or_channel, discord.TextChannel) else ctx_or_channel.channel
-        list_msg = await channel.fetch_message(list_msg_id)
-        await list_msg.edit(embed=build_roster_embed(role_name, teams, max_slots))
-    except discord.NotFound:
-        # Message was deleted — clear stored ID
-        channel_data["list_message_id"] = None
-        save_scrim_config(scrim_config)
 
 class RegistrationModal(ui.Modal, title='Scrim Registration'):
     team_name = ui.TextInput(label='Team Name', style=discord.TextStyle.short, required=True)
@@ -261,6 +212,7 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
                 embed=make_embed("❌ Error", "Configured role not found. Contact an admin.", Theme.ERROR),
                 ephemeral=True)
 
+        # Race Condition Check
         if len(channel_data.get("teams", [])) >= max_slots:
             return await interaction.response.send_message(
                 embed=make_embed("❌ Registration Full",
@@ -284,8 +236,6 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
         save_scrim_config(scrim_config)
 
         current_slots = len(channel_data.get("teams", []))
-
-        # Update panel embed
         setup_msg_id = channel_data.get("setup_message_id")
         if setup_msg_id:
             try:
@@ -294,16 +244,6 @@ class RegistrationModal(ui.Modal, title='Scrim Registration'):
                 await setup_msg.edit(embed=updated_embed)
             except discord.NotFound:
                 pass
-
-        # Auto-update list message
-        list_msg_id = channel_data.get("list_message_id")
-        if list_msg_id:
-            try:
-                list_msg = await interaction.channel.fetch_message(list_msg_id)
-                await list_msg.edit(embed=build_roster_embed(role.name, channel_data["teams"], max_slots))
-            except discord.NotFound:
-                channel_data["list_message_id"] = None
-                save_scrim_config(scrim_config)
 
         slots_left = max_slots - current_slots
         success_embed = make_embed(
@@ -366,8 +306,9 @@ class RegisterView(ui.View):
 @bot.event
 async def on_ready():
     print(f'✅ {bot.user.name} is online!')
-    bot.add_view(RegisterView())
+    bot.add_view(RegisterView())  # NEW: persistent scrim button
 
+    # ORIGINAL — channel validation (PRESERVED)
     missing = []
     if not bot.get_channel(VERIFY_HERE_CHANNEL_ID):
         missing.append(f"VERIFY_HERE_CHANNEL_ID ({VERIFY_HERE_CHANNEL_ID})")
@@ -383,14 +324,20 @@ async def on_ready():
     else:
         print("✅ All channels verified.")
 
+    # NEW: start midnight reset task
     if not midnight_reset.is_running():
         midnight_reset.start()
+
+    # NEW: start stale overwrite cleanup task
+    if not cleanup_stale_overwrites.is_running():
+        cleanup_stale_overwrites.start()
 
     print(f"📊 Loaded {len(data['verified_users'])} verified users from storage.")
     print(f"🚫 {len(data['blacklisted_users'])} blacklisted users loaded.")
 
 # ═══════════════════════════════════════════════════════════
-#  9. ON_MESSAGE
+#  9. ON_MESSAGE — SCREENSHOT + TEAM NAME (ORIGINAL — PRESERVED)
+#     + NEW: Blacklist check, cooldown, auto-role, persistent storage
 # ═══════════════════════════════════════════════════════════
 
 @bot.event
@@ -398,8 +345,12 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
+    # ==========================================
+    # STEP 2: SCREENSHOT VERIFICATION (ORIGINAL — PRESERVED)
+    # ==========================================
     if message.channel.id == VERIFY_HERE_CHANNEL_ID:
 
+        # NEW: Blacklist check
         if str(message.author.id) in data["blacklisted_users"]:
             embed = make_embed(
                 "🚫 Blacklisted",
@@ -441,6 +392,7 @@ async def on_message(message):
             await message.delete()
             return
 
+        # NEW: Cooldown check
         on_cooldown, remaining = check_cooldown(message.author.id)
         if on_cooldown:
             embed = make_embed(
@@ -510,6 +462,7 @@ async def on_message(message):
         )
         await log_channel.send(embed=log_embed, files=files_to_send)
 
+        # MODIFIED: persistent storage instead of in-memory set
         data["verified_users"].append(str(message.author.id))
         data["stats"]["total_submissions"] += 1
         set_cooldown(message.author.id)
@@ -517,6 +470,7 @@ async def on_message(message):
 
         await message.delete()
 
+        # NEW: Auto-role assignment
         verified_role_id = data.get("verified_role_id")
         if verified_role_id and message.guild:
             role = message.guild.get_role(int(verified_role_id))
@@ -526,15 +480,48 @@ async def on_message(message):
                 except discord.Forbidden:
                     print(f"⚠️ Cannot assign verified role to {message.author}")
 
-        success_embed = discord.Embed(
-            title="✅ Screenshots Accepted",
-            description=f"Great job, {message.author.mention}! Under mod review.\n\n**Next Step:** Go to <#{SYNDICATE_VERIFY_CHANNEL}> and click **Verify Your Squad**.",
-            color=discord.Color.green()
-        )
-        await message.channel.send(embed=success_embed, delete_after=30)
+        # ── CHANNEL OVERWRITE FUNNEL: Phase 2 → Phase 3 ──
+        # Lock: Remove user from #verify-here
+        try:
+            await message.channel.set_permissions(message.author, overwrite=None)
+        except discord.Forbidden:
+            print(f"⚠️ Cannot remove overwrite from #verify-here for {message.author}")
 
+        # Unlock: Grant user access to #verify-team-name
+        team_name_ch = bot.get_channel(TEAM_NAME_CHANNEL_ID)
+        if team_name_ch:
+            try:
+                await team_name_ch.set_permissions(
+                    message.author,
+                    view_channel=True,
+                    send_messages=True
+                )
+            except discord.Forbidden:
+                print(f"⚠️ Cannot add overwrite to #verify-team-name for {message.author}")
+
+            # Send instruction in the new channel
+            instruction_embed = make_embed(
+                f"📝 Next Step — {message.author.display_name}",
+                f"{Theme.SEP}\n\n"
+                f"Great job, {message.author.mention}! Your screenshots are under mod review. ✅\n\n"
+                f"**Now type your team name and tag below.**\n"
+                f"*(Just send a text message — no images)*\n\n{Theme.SEP}",
+                Theme.INFO
+            )
+            await team_name_ch.send(embed=instruction_embed, delete_after=300)
+
+        # Remove from pending overwrites tracker
+        uid_str = str(message.author.id)
+        if uid_str in data.get("pending_overwrites", {}):
+            del data["pending_overwrites"][uid_str]
+            save_data()
+
+    # ==========================================
+    # STEP 4: TEAM NAME VERIFICATION (ORIGINAL — PRESERVED)
+    # ==========================================
     elif message.channel.id == TEAM_NAME_CHANNEL_ID:
 
+        # NEW: Blacklist check
         if str(message.author.id) in data["blacklisted_users"]:
             embed = make_embed(
                 "🚫 Blacklisted",
@@ -545,6 +532,7 @@ async def on_message(message):
             await message.delete()
             return
 
+        # Block images in the text-only channel (ORIGINAL)
         if len(message.attachments) > 0:
             if not message.author.guild_permissions.administrator:
                 embed = discord.Embed(
@@ -556,8 +544,20 @@ async def on_message(message):
                 await message.delete()
             return
 
-        team_name_text = message.content
+        team_name_text = message.content.strip()
 
+        # Block empty messages
+        if not team_name_text:
+            embed = make_embed(
+                "⚠️ Empty Message",
+                f"{message.author.mention}, please type your **team name and tag**.",
+                Theme.WARNING
+            )
+            await message.channel.send(embed=embed, delete_after=5)
+            await message.delete()
+            return
+
+        # Forward the team name to the mod log (ORIGINAL)
         try:
             log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID) or await bot.fetch_channel(MOD_LOG_CHANNEL_ID)
             log_embed = discord.Embed(
@@ -569,66 +569,139 @@ async def on_message(message):
         except Exception as e:
             print(f"❌ Cannot access MOD_LOG_CHANNEL: {e}")
 
+        # NEW: Save team name to persistent storage
         data["team_names"][str(message.author.id)] = {
             "name": team_name_text,
             "submitted_at": datetime.datetime.utcnow().isoformat()
         }
         save_data()
 
-        success_embed = discord.Embed(
-            title="✅ Team Name Registered",
-            description=f"Got it, {message.author.mention}!\nYour team **{team_name_text}** is now pending final mod review.",
-            color=discord.Color.green()
-        )
-        await message.channel.send(embed=success_embed, delete_after=15)
         await message.delete()
+
+        # ── CHANNEL OVERWRITE FUNNEL: Phase 3 → Final ──
+        # Lock: Remove user from #verify-team-name
+        try:
+            await message.channel.set_permissions(message.author, overwrite=None)
+        except discord.Forbidden:
+            print(f"⚠️ Cannot remove overwrite from #verify-team-name for {message.author}")
+
+        # Unlock: Grant user access to #verify (final channel)
+        verify_final_ch = bot.get_channel(SYNDICATE_VERIFY_CHANNEL)
+        if verify_final_ch:
+            try:
+                await verify_final_ch.set_permissions(
+                    message.author,
+                    view_channel=True
+                )
+            except discord.Forbidden:
+                print(f"⚠️ Cannot add overwrite to #verify for {message.author}")
+
+            # Send confirmation in the final channel
+            success_embed = make_embed(
+                "✅ Verification Complete!",
+                f"{Theme.SEP}\n\n"
+                f"Welcome, {message.author.mention}! 🎉\n\n"
+                f"Your team **{team_name_text}** has been registered.\n"
+                f"You've completed all verification steps and are pending final mod review.\n\n{Theme.SEP}",
+                Theme.SUCCESS
+            )
+            await verify_final_ch.send(embed=success_embed, delete_after=30)
+
+        # DM confirmation
+        try:
+            dm_embed = make_embed(
+                "✅ Verification Complete!",
+                f"Your team **{team_name_text}** has been registered in **{message.guild.name}**!\n"
+                f"You've been moved to the final verification channel.",
+                Theme.SUCCESS
+            )
+            await message.author.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
 
     await bot.process_commands(message)
 
 # ═══════════════════════════════════════════════════════════
-#  10. WELCOME MESSAGE
+#  10. WELCOME MESSAGE (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.event
 async def on_member_join(member):
+    if member.bot:
+        return
+
     welcome_channel_id = data.get("welcome_channel_id")
 
+    # ── CHANNEL OVERWRITE FUNNEL: Phase 1 (Entry) ──
+    # Block blacklisted users from entering the funnel
+    if str(member.id) in data.get("blacklisted_users", []):
+        try:
+            dm_embed = make_embed(
+                "🚫 Access Denied",
+                f"You are blacklisted from verification in **{member.guild.name}**.\n"
+                f"Contact a moderator if you believe this is an error.",
+                Theme.ERROR
+            )
+            await member.send(embed=dm_embed)
+        except discord.Forbidden:
+            pass
+        return
+
+    # Grant the new user access to #verify-here
+    verify_here = member.guild.get_channel(VERIFY_HERE_CHANNEL_ID)
+    if verify_here:
+        try:
+            await verify_here.set_permissions(
+                member,
+                view_channel=True,
+                send_messages=True,
+                attach_files=True
+            )
+            # Track for stale overwrite cleanup
+            data.setdefault("pending_overwrites", {})[str(member.id)] = datetime.datetime.utcnow().isoformat()
+            save_data()
+        except discord.Forbidden:
+            print(f"⚠️ Cannot add overwrite to #verify-here for {member}")
+
+    # DM the user with instructions
     try:
         dm_embed = make_embed(
             f"👋 Welcome to {member.guild.name}!",
             f"{Theme.SEP}\n\n"
             f"Hey {member.mention}, welcome aboard! 🎉\n\n"
             f"**📋 Verification Steps:**\n\n"
-            f"> **` 1 `** Go to <#{VERIFY_HERE_CHANNEL_ID}> and upload **4 unique screenshots**\n"
-            f"> **` 2 `** Wait for mod review ✅\n"
-            f"> **` 3 `** Go to <#{SYNDICATE_VERIFY_CHANNEL}> and click **Verify Your Squad**\n"
-            f"> **` 4 `** Submit your team name in <#{TEAM_NAME_CHANNEL_ID}>\n\n"
+            f"> **` 1 `** You've been given access to the verification channel — upload **4 unique screenshots**\n"
+            f"> **` 2 `** You'll be automatically moved to submit your **team name**\n"
+            f"> **` 3 `** After that, you'll be moved to the final verification channel\n\n"
+            f"⏳ *You have {OVERWRITE_TIMEOUT_MINUTES} minutes to submit your screenshots before access expires.*\n\n"
             f"{Theme.THIN_SEP}\n"
             f"*Good luck and have fun!* 🎮\n\n{Theme.SEP}",
             Theme.ACCENT, f"Welcome to {member.guild.name}"
         )
         await member.send(embed=dm_embed)
     except discord.Forbidden:
-        pass
+        pass  # DMs disabled
 
+    # Also post in welcome channel if configured
     if welcome_channel_id:
         channel = member.guild.get_channel(int(welcome_channel_id))
         if channel:
             welcome_embed = make_embed(
                 "👋 New Member!",
                 f"Welcome {member.mention} to the server!\n"
-                f"Head to <#{VERIFY_HERE_CHANNEL_ID}> to start verification.",
+                f"Check your channels to start verification.",
                 Theme.TEAL
             )
             await channel.send(embed=welcome_embed, delete_after=60)
 
 # ═══════════════════════════════════════════════════════════
-#  11. MOD COMMANDS
+#  11. MOD COMMANDS (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def approve(ctx, member: discord.Member):
+    """Approve a user's verification. Usage: !approve @user"""
     uid = str(member.id)
 
     if uid in data["approved_users"]:
@@ -636,6 +709,7 @@ async def approve(ctx, member: discord.Member):
             f"{member.mention} was already approved.", Theme.WARNING))
         return
 
+    # Remove from rejected if they were rejected before
     if uid in data["rejected_users"]:
         data["rejected_users"].remove(uid)
 
@@ -643,6 +717,7 @@ async def approve(ctx, member: discord.Member):
     data["stats"]["total_approved"] += 1
     save_data()
 
+    # Assign verified role if configured
     verified_role_id = data.get("verified_role_id")
     if verified_role_id:
         role = ctx.guild.get_role(int(verified_role_id))
@@ -661,6 +736,7 @@ async def approve(ctx, member: discord.Member):
     )
     await ctx.send(embed=embed)
 
+    # Log to mod channel
     try:
         log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_channel:
@@ -668,6 +744,7 @@ async def approve(ctx, member: discord.Member):
     except Exception:
         pass
 
+    # DM the user
     try:
         dm_embed = make_embed("✅ You've Been Approved!",
             f"Your verification in **{ctx.guild.name}** has been approved! 🎉",
@@ -680,8 +757,10 @@ async def approve(ctx, member: discord.Member):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def reject(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    """Reject a user's verification. Usage: !reject @user [reason]"""
     uid = str(member.id)
 
+    # Remove from verified/approved
     if uid in data["verified_users"]:
         data["verified_users"].remove(uid)
     if uid in data["approved_users"]:
@@ -702,6 +781,7 @@ async def reject(ctx, member: discord.Member, *, reason: str = "No reason provid
     )
     await ctx.send(embed=embed)
 
+    # Log
     try:
         log_channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_channel:
@@ -709,6 +789,7 @@ async def reject(ctx, member: discord.Member, *, reason: str = "No reason provid
     except Exception:
         pass
 
+    # DM the user
     try:
         dm_embed = make_embed("❌ Verification Rejected",
             f"Your verification in **{ctx.guild.name}** was rejected.\n**Reason:** {reason}\n\n"
@@ -719,12 +800,13 @@ async def reject(ctx, member: discord.Member, *, reason: str = "No reason provid
         pass
 
 # ═══════════════════════════════════════════════════════════
-#  12. BLACKLIST SYSTEM
+#  12. BLACKLIST SYSTEM (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def blacklist(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    """Permanently block a user. Usage: !blacklist @user [reason]"""
     uid = str(member.id)
     if uid in data["blacklisted_users"]:
         await ctx.send(embed=make_embed("⚠️ Already Blacklisted",
@@ -755,6 +837,7 @@ async def blacklist(ctx, member: discord.Member, *, reason: str = "No reason pro
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def unblacklist(ctx, member: discord.Member):
+    """Remove a user from the blacklist. Usage: !unblacklist @user"""
     uid = str(member.id)
     if uid not in data["blacklisted_users"]:
         await ctx.send(embed=make_embed("⚠️ Not Blacklisted",
@@ -772,11 +855,12 @@ async def unblacklist(ctx, member: discord.Member):
     await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  13. STATUS COMMAND
+#  13. STATUS COMMAND (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 async def status(ctx):
+    """Check your verification progress. Usage: !status"""
     uid = str(ctx.author.id)
 
     if uid in data["blacklisted_users"]:
@@ -809,12 +893,13 @@ async def status(ctx):
     await ctx.send(embed=embed, delete_after=30)
 
 # ═══════════════════════════════════════════════════════════
-#  14. STATS COMMAND
+#  14. STATS COMMAND (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def stats(ctx):
+    """View verification statistics. Usage: !stats"""
     s = data["stats"]
     total_verified = len(data["verified_users"])
     total_approved = len(data["approved_users"])
@@ -840,12 +925,13 @@ async def stats(ctx):
     await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  15. CONFIGURATION COMMANDS
+#  15. CONFIGURATION COMMANDS (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setrole(ctx, role: discord.Role):
+    """Set the verified role. Usage: !setrole @Role"""
     data["verified_role_id"] = str(role.id)
     save_data()
     embed = make_embed("✅ Verified Role Set",
@@ -857,6 +943,7 @@ async def setrole(ctx, role: discord.Role):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setwelcome(ctx, channel: discord.TextChannel):
+    """Set the welcome channel. Usage: !setwelcome #channel"""
     data["welcome_channel_id"] = str(channel.id)
     save_data()
     embed = make_embed("✅ Welcome Channel Set",
@@ -868,12 +955,13 @@ async def setwelcome(ctx, channel: discord.TextChannel):
 @bot.command(name="scrim_setup")
 @commands.has_permissions(administrator=True)
 async def scrim_setup(ctx, role: discord.Role, slots: int):
+    """Set up scrim registration in the current channel. Usage: !scrim_setup @Role <slots>"""
     if slots < 1 or slots > 100:
         await ctx.send(embed=make_embed("❌ Invalid Slots", "Must be between 1 and 100.", Theme.ERROR))
         return
 
     scrim_config = load_scrim_config()
-
+    
     embed = create_setup_embed(role.name, 0, slots)
     msg = await ctx.send(embed=embed, view=RegisterView())
 
@@ -885,41 +973,42 @@ async def scrim_setup(ctx, role: discord.Role, slots: int):
         "is_open": True
     }
     save_scrim_config(scrim_config)
+    
     await ctx.message.delete()
-
 
 @bot.command(name="open")
 @commands.has_permissions(administrator=True)
 async def cmd_open(ctx):
+    """Manually unlock the registration button."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
-
+    
     channel_data["is_open"] = True
     save_scrim_config(scrim_config)
     await ctx.send(embed=make_embed("🔓 Unlocked", "Registration is now open.", Theme.SUCCESS))
 
-
 @bot.command(name="close")
 @commands.has_permissions(administrator=True)
 async def cmd_close(ctx):
+    """Manually lock the registration button."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
-
+    
     channel_data["is_open"] = False
     save_scrim_config(scrim_config)
     await ctx.send(embed=make_embed("🔒 Locked", "Registration is now closed.", Theme.ERROR))
 
-
 @bot.command(name="wipe")
 @commands.has_permissions(administrator=True)
 async def cmd_wipe(ctx):
+    """Manually wipe the scrim roster for the current channel."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
-
+    
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
 
@@ -930,11 +1019,11 @@ async def cmd_wipe(ctx):
                 await member.remove_roles(role)
             except discord.Forbidden:
                 pass
-
+                
     channel_data["teams"] = []
     save_scrim_config(scrim_config)
-
-    # Update panel embed
+    
+    # Update the setup message
     setup_msg_id = channel_data.get("setup_message_id")
     if setup_msg_id:
         try:
@@ -944,30 +1033,27 @@ async def cmd_wipe(ctx):
         except discord.NotFound:
             pass
 
-    # Auto-update list message
-    await update_list_message(ctx, channel_data, scrim_config)
-
-    await ctx.send(embed=make_embed("🧹 Roster Wiped",
-        "All teams cleared, roles removed, panel reset to 0.", Theme.SUCCESS))
-
+    await ctx.send(embed=make_embed("🧹 Roster Wiped", "All teams have been cleared and roles removed. The panel is reset to 0.", Theme.SUCCESS))
 
 @bot.command(name="removeslot")
 @commands.has_permissions(administrator=True)
 async def cmd_removeslot(ctx, slot: int):
+    """Manually remove a specific team from a slot (e.g., !removeslot 3)."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
-
+    
     if not channel_data:
         return await ctx.send(embed=make_embed("⚠️ Error", "Not a registration channel.", Theme.ERROR))
 
     teams = channel_data.get("teams", [])
     if slot < 1 or slot > len(teams):
-        return await ctx.send(embed=make_embed("❌ Error",
-            f"Invalid slot number. Must be between 1 and {len(teams)}.", Theme.ERROR))
+        return await ctx.send(embed=make_embed("❌ Error", f"Invalid slot number. Must be between 1 and {len(teams)}.", Theme.ERROR))
 
+    # Get the team and user ID
     removed_team = teams.pop(slot - 1)
     user_id = removed_team.get("user_id")
 
+    # Remove the role if we have the user ID
     if user_id:
         role = ctx.guild.get_role(channel_data["role_id"])
         if role:
@@ -979,64 +1065,94 @@ async def cmd_removeslot(ctx, slot: int):
                     pass
 
     save_scrim_config(scrim_config)
-
-    # Update panel embed
-    role = ctx.guild.get_role(channel_data["role_id"])
+    
+    # Update the panel message
     setup_msg_id = channel_data.get("setup_message_id")
     if setup_msg_id:
         try:
             setup_msg = await ctx.channel.fetch_message(setup_msg_id)
+            role = ctx.guild.get_role(channel_data["role_id"])
             updated_embed = create_setup_embed(role.name if role else "Scrim", len(teams), channel_data["max_slots"])
             await setup_msg.edit(embed=updated_embed)
         except discord.NotFound:
             pass
 
-    # ── Auto-update live roster embed ──
-    await update_list_message(ctx, channel_data, scrim_config)
-
-    await ctx.send(embed=make_embed("🗑️ Slot Removed",
-        f"Successfully removed **{removed_team['team_name']}** from Slot {slot}.", Theme.SUCCESS))
-
+    await ctx.send(embed=make_embed("🗑️ Slot Removed", f"Successfully removed **{removed_team['team_name']}** from Slot {slot}.", Theme.SUCCESS))
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def announce(ctx, role: discord.Role, *, message: str = "Registration is now open! Grab your slots before they fill up."):
+    """Announce scrims are open and ping a role. Usage: !announce @Role [message]"""
     await ctx.message.delete()
+    
     embed = make_embed(
         "📢 Scrim Announcement",
-        f"{Theme.SEP}\n\n{message}\n\n{Theme.SEP}",
+        f"{Theme.SEP}\n\n"
+        f"{message}\n\n"
+        f"{Theme.SEP}",
         Theme.GOLD
     )
+    
     await ctx.send(content=f"{role.mention}", embed=embed)
-
 
 @bot.command(name="list")
 async def cmd_list(ctx):
+    """Shows the live roster formatted as a clean code block."""
     scrim_config = load_scrim_config()
     channel_data = scrim_config.get(str(ctx.channel.id))
-
+    
     if not channel_data:
         return await ctx.send("⚠️ This channel is not set up for registration.")
-
+        
     role_id = channel_data["role_id"]
-    role = ctx.guild.get_role(role_id)
-    teams = channel_data.get("teams", [])
     max_slots = channel_data["max_slots"]
-    role_name = role.name if role else "MATCH"
-
-    embed = build_roster_embed(role_name, teams, max_slots)
-    msg = await ctx.send(embed=embed)
-
-    # ── Store list message ID for auto-update ──
-    channel_data["list_message_id"] = msg.id
-    save_scrim_config(scrim_config)
+    role = ctx.guild.get_role(role_id)
+    
+    registered_teams = channel_data.get("teams", [])
+    current_filled = len(registered_teams)
+    
+    status_icon = "🟢" if current_filled < max_slots else "🔴"
+    status_text = "Slots Open" if current_filled < max_slots else "Registration Full"
+    
+    bar_length = 10
+    filled_length = int(round(bar_length * current_filled / float(max_slots))) if max_slots > 0 else 0
+    progress_bar = ("▰" * filled_length) + ("▱" * (bar_length - filled_length))
+    
+    description_header = f"{status_icon} {status_text} • **{current_filled}/{max_slots}** slots filled\n`{progress_bar}`\n\n"
+    
+    list_content = "```text\n"
+    list_content += "##   |  TEAM NAME\n"
+    list_content += "—————|————————————————————————\n"
+    
+    for i in range(max_slots):
+        slot_num = str(i + 1).zfill(2)
+        
+        if i < current_filled:
+            team = registered_teams[i]
+            team_name = team['team_name']
+            if len(team_name) > 20:
+                team_name = team_name[:17] + "..."
+            list_content += f"{slot_num}   |  ◇  {team_name}\n"
+        else:
+            list_content += f"{slot_num}   |  ◇  — Open —\n"
+            
+    list_content += "```"
+    
+    embed = discord.Embed(
+        title=f"🏆 {role.name if role else 'MATCH'} — Live Roster",
+        description=description_header + list_content,
+        color=discord.Color.brand_green() if current_filled < max_slots else discord.Color.red()
+    )
+    embed.set_footer(text="🔄 Auto-updates • Do not type here")
+    await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  16. HELP COMMAND
+#  16. HELP COMMAND (NEW — beautiful embed)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command(name="help")
 async def cmd_help(ctx):
+    """Show all available commands."""
     is_admin = ctx.author.guild_permissions.administrator
 
     embed = make_embed(
@@ -1048,10 +1164,9 @@ async def cmd_help(ctx):
         f"> `!help` — Show this help menu\n\n"
         f"{Theme.THIN_SEP}\n\n"
         f"**📋 Verification Steps**\n\n"
-        f"> **` 1 `** Upload **4 unique screenshots** in <#{VERIFY_HERE_CHANNEL_ID}>\n"
-        f"> **` 2 `** Wait for mod approval ✅\n"
-        f"> **` 3 `** Verify your squad in <#{SYNDICATE_VERIFY_CHANNEL}>\n"
-        f"> **` 4 `** Submit team name in <#{TEAM_NAME_CHANNEL_ID}>\n",
+        f"> **` 1 `** Upload **4 unique screenshots** — channel appears automatically on join\n"
+        f"> **` 2 `** Submit your **team name** — you'll be moved there after screenshots\n"
+        f"> **` 3 `** Final verification channel unlocks automatically\n",
         Theme.PREMIUM
     )
 
@@ -1080,12 +1195,13 @@ async def cmd_help(ctx):
     await ctx.send(embed=embed, delete_after=120)
 
 # ═══════════════════════════════════════════════════════════
-#  17. UTILITY COMMANDS
+#  17. UTILITY COMMANDS (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def resetuser(ctx, member: discord.Member):
+    """Reset a user's verification data. Usage: !resetuser @user"""
     uid = str(member.id)
     changed = False
 
@@ -1101,11 +1217,40 @@ async def resetuser(ctx, member: discord.Member):
     if uid in data.get("cooldowns", {}):
         del data["cooldowns"][uid]
         changed = True
+    if uid in data.get("pending_overwrites", {}):
+        del data["pending_overwrites"][uid]
+        changed = True
+
+    # Clean up channel permission overwrites for all 3 verification channels
+    for ch_id in [VERIFY_HERE_CHANNEL_ID, TEAM_NAME_CHANNEL_ID, SYNDICATE_VERIFY_CHANNEL]:
+        ch = ctx.guild.get_channel(ch_id)
+        if ch and member in ch.overwrites:
+            try:
+                await ch.set_permissions(member, overwrite=None)
+                changed = True
+            except discord.Forbidden:
+                pass
+
+    # Re-grant access to #verify-here so user can restart the funnel
+    verify_here = ctx.guild.get_channel(VERIFY_HERE_CHANNEL_ID)
+    if verify_here:
+        try:
+            await verify_here.set_permissions(
+                member,
+                view_channel=True,
+                send_messages=True,
+                attach_files=True
+            )
+            data.setdefault("pending_overwrites", {})[uid] = datetime.datetime.utcnow().isoformat()
+            changed = True
+        except discord.Forbidden:
+            pass
 
     if changed:
         save_data()
         embed = make_embed("🔄 User Reset",
-            f"{member.mention}'s verification data has been cleared.\nThey can re-submit.",
+            f"{member.mention}'s verification has been fully reset.\n"
+            f"They've been re-granted access to start over from the beginning.",
             Theme.SUCCESS)
     else:
         embed = make_embed("⚠️ No Data",
@@ -1115,7 +1260,7 @@ async def resetuser(ctx, member: discord.Member):
     await ctx.send(embed=embed)
 
 # ═══════════════════════════════════════════════════════════
-#  18. MIDNIGHT RESET TASK
+#  18. MIDNIGHT RESET TASK (NEW — resets scrim roles daily)
 # ═══════════════════════════════════════════════════════════
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1123,12 +1268,13 @@ MIDNIGHT_IST = datetime.time(hour=0, minute=0, second=0, tzinfo=IST)
 
 @tasks.loop(time=MIDNIGHT_IST)
 async def midnight_reset():
+    """Reset scrim registration roles at midnight IST."""
     print("🕛 MIDNIGHT RESET: Cleaning up scrim roles...")
     scrim_config = load_scrim_config()
 
     for channel_id_str, channel_data in scrim_config.items():
         channel_data["teams"] = []
-
+        
         for guild in bot.guilds:
             role = guild.get_role(channel_data["role_id"])
             if role:
@@ -1137,7 +1283,8 @@ async def midnight_reset():
                         await member.remove_roles(role)
                     except discord.Forbidden:
                         pass
-
+                
+                # Reset the panel message
                 try:
                     channel = guild.get_channel(int(channel_id_str))
                     if channel:
@@ -1146,20 +1293,10 @@ async def midnight_reset():
                         await setup_msg.edit(embed=updated_embed)
                 except Exception:
                     pass
-
-                # Auto-update list message on midnight reset
-                list_msg_id = channel_data.get("list_message_id")
-                if list_msg_id:
-                    try:
-                        channel = guild.get_channel(int(channel_id_str))
-                        if channel:
-                            list_msg = await channel.fetch_message(list_msg_id)
-                            await list_msg.edit(embed=build_roster_embed(role.name, [], channel_data["max_slots"]))
-                    except Exception:
-                        pass
-
+                    
     save_scrim_config(scrim_config)
 
+    # Clean up old cooldowns (older than 24h)
     now = datetime.datetime.utcnow()
     expired = []
     for uid, ts in data.get("cooldowns", {}).items():
@@ -1176,7 +1313,89 @@ async def midnight_reset():
     print("✅ Midnight reset complete.")
 
 # ═══════════════════════════════════════════════════════════
-#  19. ERROR HANDLER
+#  18b. STALE OVERWRITE CLEANUP (NEW — prevents 100 overwrite cap)
+# ═══════════════════════════════════════════════════════════
+
+@tasks.loop(minutes=15)
+async def cleanup_stale_overwrites():
+    """Remove permission overwrites for users idle in #verify-here past the timeout."""
+    print("🧹 Running stale overwrite cleanup...")
+    now = datetime.datetime.utcnow()
+    pending = data.get("pending_overwrites", {})
+    expired_users = []
+
+    for uid, ts in list(pending.items()):
+        try:
+            granted_at = datetime.datetime.fromisoformat(ts)
+            elapsed_minutes = (now - granted_at).total_seconds() / 60
+            if elapsed_minutes > OVERWRITE_TIMEOUT_MINUTES:
+                expired_users.append(uid)
+        except Exception:
+            expired_users.append(uid)
+
+    if not expired_users:
+        print("✅ No stale overwrites found.")
+        return
+
+    for guild in bot.guilds:
+        verify_here = guild.get_channel(VERIFY_HERE_CHANNEL_ID)
+        if not verify_here:
+            continue
+
+        log_channel = guild.get_channel(MOD_LOG_CHANNEL_ID)
+
+        for uid in expired_users:
+            member = guild.get_member(int(uid))
+            if not member:
+                # User left the server, just clean up data
+                if uid in pending:
+                    del pending[uid]
+                continue
+
+            # Remove overwrite from #verify-here
+            try:
+                await verify_here.set_permissions(member, overwrite=None)
+            except discord.Forbidden:
+                print(f"⚠️ Cannot remove stale overwrite for {member}")
+
+            # DM the user
+            try:
+                dm_embed = make_embed(
+                    "⏰ Verification Timed Out",
+                    f"Your access to the verification channel in **{guild.name}** has expired "
+                    f"because you didn't submit your screenshots within {OVERWRITE_TIMEOUT_MINUTES} minutes.\n\n"
+                    f"**Rejoin the server or ask an admin to reset your access when you're ready.**",
+                    Theme.WARNING
+                )
+                await member.send(embed=dm_embed)
+            except discord.Forbidden:
+                pass
+
+            # Log to mod channel
+            if log_channel:
+                try:
+                    log_embed = make_embed(
+                        "⏰ Stale Overwrite Removed",
+                        f"**User:** {member.mention} (`{member.id}`)\n"
+                        f"**Reason:** Did not submit screenshots within {OVERWRITE_TIMEOUT_MINUTES} minutes.",
+                        Theme.WARNING
+                    )
+                    await log_channel.send(embed=log_embed)
+                except Exception:
+                    pass
+
+            if uid in pending:
+                del pending[uid]
+
+    save_data()
+    print(f"✅ Cleaned up {len(expired_users)} stale overwrite(s).")
+
+@cleanup_stale_overwrites.before_loop
+async def before_cleanup():
+    await bot.wait_until_ready()
+
+# ═══════════════════════════════════════════════════════════
+#  19. ERROR HANDLER (NEW)
 # ═══════════════════════════════════════════════════════════
 
 @bot.event
@@ -1205,7 +1424,7 @@ async def on_command_error(ctx, error):
     print(f"[ERROR] {error}")
 
 # ═══════════════════════════════════════════════════════════
-#  20. STARTUP
+#  20. STARTUP (ORIGINAL — PRESERVED + enhanced)
 # ═══════════════════════════════════════════════════════════
 
 keep_alive()
